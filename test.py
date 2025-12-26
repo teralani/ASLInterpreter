@@ -86,10 +86,20 @@ try:
                 )
 
                 # Draw landmark points
-                for lm in hand_landmarks:
+                for landmark_idx, lm in enumerate(hand_landmarks):
                     x: int = int(lm.x * width)
                     y: int = int(lm.y * height)
                     cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)
+                    cv2.putText(
+                        frame,
+                        str(landmark_idx),
+                        (x, y),
+                        cv2.FONT_HERSHEY_COMPLEX_SMALL,
+                        0.9,
+                        (255, 255, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
 
                 # Draw connections
                 for conn in HandLandmarksConnections.HAND_CONNECTIONS:
@@ -105,7 +115,7 @@ try:
                 cv2.putText(
                     frame,
                     hand_label,
-                    (lx, ly),
+                    (int(lx*1.1), int(ly*0.9)),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     1,
                     (255, 255, 0),
