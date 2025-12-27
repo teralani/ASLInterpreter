@@ -1,0 +1,15 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Dataset
+data/download_*.log
+data/missing.txt
+data/raw_videos/
+data/raw_videos_mp4/
+data/videos/
