@@ -22,7 +22,7 @@ from mediapipe.tasks import python
 # === MODEL SETUP ===
 
 # Provide the path to your downloaded hand_landmarker.task model.
-HAND_MODEL_PATH: str = "hand_landmarker.task"
+HAND_MODEL_PATH: str = "mediapipe_models/hand_landmarker.task"
 
 # Global variable to store the latest async result.
 latest_hand_result: Optional[HandLandmarkerResult] = None
@@ -49,7 +49,7 @@ hand_landmarker: HandLandmarker = HandLandmarker.create_from_options(hand_option
 
 # Pose Landmarker
 
-POSE_MODEL_PATH : str = "pose_landmarker_full.task"
+POSE_MODEL_PATH : str = "mediapipe_models/pose_landmarker_full.task"
 
 latest_pose_result: Optional[PoseLandmarkerResult] = None
 
@@ -167,6 +167,17 @@ try:
                     2,
                     cv2.LINE_AA,
                 )
+            # Draw in coordinates
+            cv2.putText(
+                frame,
+                str(latest_hand_result.hand_landmarks[0][0].z),
+                (10, 10),
+                cv2.FONT_HERSHEY_COMPLEX_SMALL,
+                1,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA
+            )
 
         # Draw landmarks if available
         if latest_pose_result and latest_pose_result.pose_landmarks:
@@ -190,7 +201,6 @@ try:
                     sx2, sy2 = int(start_lm2.x * width), int(start_lm2.y * height)
                     ex2, ey2 = int(end_lm2.x * width), int(end_lm2.y * height)
                     cv2.line(frame, (sx2, sy2), (ex2, ey2), (0, 255, 0), 2)
-
 
         cv2.imshow("Landmarks", frame)
 
