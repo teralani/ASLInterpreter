@@ -96,12 +96,15 @@ def main():
         model.train()
         train_loss = 0.0
 
-        for x, y in tqdm(train_loader, desc=f"Epoch {epoch+1} Training", leave=False):
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1} Training", leave=False):
+            # dataset now returns ((coords, mask), label)
+            (x, mask), y = batch
             x = x.to(device)
+            mask = mask.to(device)
             y = y.to(device)
 
             optimizer.zero_grad()
-            logits = model(x)
+            logits = model(x, mask)
             loss = criterion(logits, y)
 
             # guard NaN loss
@@ -125,11 +128,13 @@ def main():
         total = 0
 
         with torch.no_grad():
-            for x, y in val_loader:
+            for batch in val_loader:
+                (x, mask), y = batch
                 x = x.to(device)
+                mask = mask.to(device)
                 y = y.to(device)
 
-                logits = model(x)
+                logits = model(x, mask)
                 loss = criterion(logits, y)
                 val_loss += loss.item()
 
@@ -153,11 +158,13 @@ def main():
     total = 0
 
     with torch.no_grad():
-        for x, y in test_loader:
+        for batch in test_loader:
+            (x, mask), y = batch
             x = x.to(device)
+            mask = mask.to(device)
             y = y.to(device)
 
-            logits = model(x)
+            logits = model(x, mask)
             preds = logits.argmax(dim=1)
 
             correct += (preds == y).sum().item()

@@ -170,10 +170,10 @@ try:
             # Draw in coordinates
             cv2.putText(
                 frame,
-                (str(latest_hand_result.hand_landmarks[0][0].z) if str(latest_hand_result.hand_landmarks[0][0].z) else "N/A"),
+                (f"{latest_hand_result.hand_world_landmarks[0][8].x:05.3f} {latest_hand_result.hand_world_landmarks[0][8].y:05.3f} {latest_hand_result.hand_world_landmarks[0][8].z:05.3f}" if str(latest_hand_result.hand_world_landmarks[0][8]) else "N/A"),
                 (10, 10),
                 cv2.FONT_HERSHEY_COMPLEX_SMALL,
-                1,
+                0.5,
                 (255, 255, 255),
                 1,
                 cv2.LINE_AA

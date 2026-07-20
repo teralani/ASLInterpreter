@@ -1,19 +1,19 @@
 from pathlib import Path
 import json
 
-RAW_DIR = Path("data/videos")
-PROCESSED_DIR = Path("data/processed")
-LOG_FILE = Path("data/failed_videos.txt")
-JSON_FILE = Path("data/WLASL_v0.3.json")
+        with open(JSON_FILE, "r") as file, LOG_FILE.open("w") as f:
+            data = json.load(file)
+            d = {str(vid["video_id"]) for word in data for vid in word["instances"]}
+            processed_files = {f.stem for f in PROCESSED_DIR.glob("*.npy")}
+            failed_files = sorted(d - processed_files)
+            print(len(failed_files))
 
-def log_failed_files():
-    if not RAW_DIR.exists():
-        print(f"{RAW_DIR} does not exist.")
-        return
-    if not PROCESSED_DIR.exists():
-        print(f"{PROCESSED_DIR} does not exist.")
-        return
+            for name in failed_files:
+                f.write(name + "\n")
 
+            print(f"Logged {len(failed_files)} failed videos to {LOG_FILE}")
+            print(f"There were a total of {len(d)} files in {JSON_FILE}")
+            print(f"There are {len(processed_files)} files currently processed")
     raw_files = {f.stem for f in RAW_DIR.glob("*.mp4")}
 
     processed_files = {f.stem for f in PROCESSED_DIR.glob("*.npy")}

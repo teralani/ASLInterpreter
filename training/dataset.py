@@ -58,6 +58,15 @@ class ASLDataset(Dataset):
     def __getitem__(self, idx):
         x = np.load(self.files[idx])  # (T, J, 3) or empty
 
+        # try to load optional mask saved alongside coordinates (stem_mask.npy)
+        mask_path = self.processed_dir / f"{self.files[idx].stem}_mask.npy"
+        mask = None
+        if mask_path.exists():
+            try:
+                mask = np.load(mask_path)  # (F, J) or similar
+            except Exception:
+                mask = None
+
         T, J, C = self.T, self.num_joints, 3
 
         # ----------------------------------
@@ -65,6 +74,7 @@ class ASLDataset(Dataset):
         # ----------------------------------
         if x.ndim != 3 or x.shape[0] == 0:
             x_out = np.zeros((T, J, C), dtype=np.float32)
+            mask_out = np.zeros((T, J), dtype=np.float32)
 
         # ----------------------------------
         # Pad short sequences
@@ -76,6 +86,16 @@ class ASLDataset(Dataset):
             else:
                 min_j = min(x.shape[1], J)
                 x_out[:x.shape[0], :min_j] = x[:, :min_j]
+            # pad mask similarly if available
+            if mask is not None:
+                mask_out = np.zeros((T, J), dtype=np.float32)
+                if mask.shape[1] == J:
+                    mask_out[:mask.shape[0]] = mask
+                else:
+                    min_j = min(mask.shape[1], J)
+                    mask_out[:mask.shape[0], :min_j] = mask[:, :min_j]
+            else:
+                mask_out = np.zeros((T, J), dtype=np.float32)
 
         # ----------------------------------
         # Uniformly subsample long sequences
@@ -89,6 +109,17 @@ class ASLDataset(Dataset):
                 x_out = np.zeros((T, J, C), dtype=np.float32)
                 min_j = min(x_sub.shape[1], J)
                 x_out[:, :min_j] = x_sub[:, :min_j]
+            # subsample mask if available
+            if mask is not None:
+                mask_sub = mask[idxs]
+                if mask_sub.shape[1] == J:
+                    mask_out = mask_sub
+                else:
+                    mask_out = np.zeros((T, J), dtype=np.float32)
+                    min_j = min(mask_sub.shape[1], J)
+                    mask_out[:, :min_j] = mask_sub[:, :min_j]
+            else:
+                mask_out = np.zeros((T, J), dtype=np.float32)
 
         else:
             if x.shape[1] == J:
@@ -97,9 +128,19 @@ class ASLDataset(Dataset):
                 x_out = np.zeros((T, J, C), dtype=np.float32)
                 min_j = min(x.shape[1], J)
                 x_out[:, :min_j] = x[:, :min_j]
+            if mask is not None:
+                if mask.shape[1] == J:
+                    mask_out = mask
+                else:
+                    mask_out = np.zeros((T, J), dtype=np.float32)
+                    min_j = min(mask.shape[1], J)
+                    mask_out[:, :min_j] = mask[:, :min_j]
+            else:
+                mask_out = np.zeros((T, J), dtype=np.float32)
 
         # sanitize numerical issues
         x_out = np.nan_to_num(x_out, nan=0.0, posinf=1e5, neginf=-1e5).astype(np.float32)
+        mask_out = np.nan_to_num(mask_out, nan=0.0, posinf=1.0, neginf=0.0).astype(np.float32)
 
         # normalize per-sample to avoid extremely large coordinates
         max_abs = float(np.max(np.abs(x_out))) if x_out.size else 0.0
@@ -116,5 +157,6 @@ class ASLDataset(Dataset):
         # ensure at least one valid frame (avoid fully-masked sequences)
         if not (np.abs(x_out).sum(axis=(1,2)) > 0).any():
             x_out[0, :, :] = 1e-6
+            mask_out[0, :] = 1.0
 
-        return torch.from_numpy(x_out).float(), torch.tensor(y, dtype=torch.long)
+        return (torch.from_numpy(x_out).float(), torch.from_numpy(mask_out).float()), torch.tensor(y, dtype=torch.long)

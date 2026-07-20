@@ -11,11 +11,11 @@ class SpatialAttentionWithBias(nn.Module):
         bias = torch.where(adj == 1, torch.zeros_like(adj), torch.full_like(adj, -1e9))
         self.register_buffer("bias", bias)  # (J, J)
 
-    def forward(self, x):
+    def forward(self, x, key_padding_mask=None):
         """
         x: (B*T, J, D)
         bias: (J, J)  --> automatically broadcast across batch
         """
         # ensure bias matches input dtype/device to avoid unexpected casts
         bias = self.bias.to(dtype=x.dtype, device=x.device)
-        return self.attn(x, x, x, attn_mask=bias)[0]
+        return self.attn(x, x, x, attn_mask=bias, key_padding_mask=key_padding_mask)[0]

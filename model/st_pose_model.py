@@ -38,15 +38,23 @@ class STPoseModel(nn.Module):
                 stats = {"min": float("nan"), "max": float("nan"), "mean": float("nan"), "std": float("nan")}
             raise RuntimeError(f"Non-finite values detected in {name}: {stats}")
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         x = add_velocity(x)
         self._assert_finite(x, "after_add_velocity")
         assert x.shape[-1] == 6, f"Expected 6 channels, got {x.shape[-1]}"
 
         B, T, J, C = x.shape
 
-        # Masking bad inputs/frames:
-        valid_frames = (x.abs().sum(dim=(2,3))> 0) # (B, T)
+        # If mask is provided use it; otherwise infer validity from coordinates
+        # mask shape expected: (B, T, J) with 1.0 for observed joints, 0.0 otherwise
+        if mask is not None:
+            # ensure boolean mask
+            valid_joints = (mask > 0.5)
+        else:
+            valid_joints = (x.abs().sum(dim=-1) > 0)  # (B, T, J)
+
+        # Masking bad inputs/frames (frame valid if any joint observed)
+        valid_frames = valid_joints.any(dim=2) if valid_joints.ndim == 3 else valid_joints.any(dim=2)
 
         # Ensure at least one valid frame per sample to avoid attention over entirely-masked sequences
         # (mark first frame valid if none are valid)
@@ -61,7 +69,13 @@ class STPoseModel(nn.Module):
         x = self.embed(x) # (B, T, J, D)
         self._assert_finite(x, "after_embed")
         x = x.view(B*T, J, -1) # (B*T, J, D)
-        x = self.spatial(x) # (B*T, J, D)
+        # Build joint-level key_padding_mask for spatial attention: True where to mask
+        if mask is not None:
+            joint_kpm = ~valid_joints.view(B*T, J)
+        else:
+            joint_kpm = ~(x.abs().sum(dim=-1) > 0)
+
+        x = self.spatial(x, key_padding_mask=joint_kpm) # (B*T, J, D)
         self._assert_finite(x, "after_spatial")
         x = x.view(B, T, J, -1)
 
@@ -73,8 +87,13 @@ class STPoseModel(nn.Module):
         x = x + self.pos[:, :T]
         self._assert_finite(x, "after_pos_add")
 
+        # Create causal attention mask (prevent attending to future frames)
+        device = x.device
+        attn_mask = torch.triu(torch.full((T, T), float("-inf"), device=device), diagonal=1)
+
         x, _ = self.temporal(
             x, x, x,
+            attn_mask=attn_mask,
             key_padding_mask=key_padding_mask
         )
         self._assert_finite(x, "after_temporal")
