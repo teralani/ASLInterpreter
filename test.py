@@ -170,7 +170,7 @@ try:
             # Draw in coordinates
             cv2.putText(
                 frame,
-                str(latest_hand_result.hand_landmarks[0][0].z),
+                (str(latest_hand_result.hand_landmarks[0][0].z) if str(latest_hand_result.hand_landmarks[0][0].z) else "N/A"),
                 (10, 10),
                 cv2.FONT_HERSHEY_COMPLEX_SMALL,
                 1,
@@ -202,6 +202,7 @@ try:
                     ex2, ey2 = int(end_lm2.x * width), int(end_lm2.y * height)
                     cv2.line(frame, (sx2, sy2), (ex2, ey2), (0, 255, 0), 2)
 
+        cv2.namedWindow("Landmarks", cv2.WINDOW_NORMAL)
         cv2.imshow("Landmarks", frame)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):

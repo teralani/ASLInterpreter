@@ -7,13 +7,15 @@ class SpatialAttentionWithBias(nn.Module):
 
         self.attn = nn.MultiheadAttention(dim, heads, batch_first=True)
 
-        self.register_buffer("adj", adj)
-        # creates a non-learnable persistent tensor to a module
-        # used for the positional/relational encodings for the edges (adjacency matrix)
+        # Convert adjacency 0/1 to additive bias
+        bias = torch.where(adj == 1, torch.zeros_like(adj), torch.full_like(adj, -1e9))
+        self.register_buffer("bias", bias)  # (J, J)
 
     def forward(self, x):
-        bias = self.adj.unsqueeze(0) 
-        # inserts dimension at 0th index -> [1, num_joints, num_joints]
-
-        return self.attn(x, x, x, attn_mask=bias)[0]    
-        #returns attn_output from the linear transformation instead of attn_output_weights (tensor with attention weights)
+        """
+        x: (B*T, J, D)
+        bias: (J, J)  --> automatically broadcast across batch
+        """
+        # ensure bias matches input dtype/device to avoid unexpected casts
+        bias = self.bias.to(dtype=x.dtype, device=x.device)
+        return self.attn(x, x, x, attn_mask=bias)[0]
