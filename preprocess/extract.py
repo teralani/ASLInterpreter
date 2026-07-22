@@ -1,5 +1,3 @@
-import itertools
-import os
 from pathlib import Path
 import cv2
 import numpy as np
@@ -12,8 +10,10 @@ from mediapipe.tasks.python.vision import (
     PoseLandmarker,
     PoseLandmarkerOptions,
 )
-from mediapipe.tasks import python
 import logging
+
+from utils.skeleton import POSE_JOINT_INDICES, NUM_POSE_JOINTS, WINDOW_DURATION_MS, WINDOW_FRAMES, FRAME_INTERVAL_MS
+print(POSE_JOINT_INDICES)
 
 RAW_DIR = Path("data/videos")
 OUT_DIR = Path("data/processed")
@@ -25,29 +25,6 @@ logger = logging.getLogger(__name__)
 POSE_MODEL_PATH = "mediapipe_models/pose_landmarker_full.task"
 HAND_MODEL_PATH = "mediapipe_models/hand_landmarker.task"
 
-# Hand model's landmarks are connected to elbows to prevent a redundant wrist landmark
-# Fixed order for pose joints
-POSE_JOINT_INDICES =    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, # Face
-                        11, 12,      # Shoulders
-                        13, 14,      # Elbows
-                        15, 16,      # Wrists
-                        23, 24       # Hips
-                        ]
-
-NUM_POSE_JOINTS = len(POSE_JOINT_INDICES)
-
-NUM_HAND_JOINTS = 21
-
-# Fixed window to match with a real-time window later on
-WINDOW_DURATION_MS = 2000.0
-WINDOW_FRAMES = 60 # Fixed number of frames to sample across the window
-FRAME_INTERVAL_MS = WINDOW_DURATION_MS / WINDOW_FRAMES
-
-# Resulting per-frame layout: J = NUM_POSE_JOINTS + HAND_JOINTS * 2 = 17 + 21*2 = 59
-# [0                             : NUM_POSE_JOINTS]                    (pose joints)
-# [NUM_POSE_JOINTS               : NUM_POSE_JOINTS + HAND_JOINTS]      (left hand, local index 0 = wrist)
-# [NUM_POSE_JOINTS + HAND_JOINTS : NUM_POSE_JOINTS + HAND_JOINTS * 2]  (right hand, local index 0 = wrist)
-
 def _build_pose_options():
     return PoseLandmarkerOptions(
         base_options = mp.tasks.BaseOptions(model_asset_path = "mediapipe_models/pose_landmarker_full.task"),
@@ -56,10 +33,10 @@ def _build_pose_options():
 
 def _build_hand_options():
     return HandLandmarkerOptions(
-            base_options = mp.tasks.BaseOptions(model_asset_path="mediapipe_models/hand_landmarker.task"),
-            num_hands = 2,
-            running_mode = RunningMode.VIDEO,
-        )
+        base_options = mp.tasks.BaseOptions(model_asset_path="mediapipe_models/hand_landmarker.task"),
+        num_hands = 2,
+        running_mode = RunningMode.VIDEO,
+    )
 
 def normalize_hands(hand_result):
     """
@@ -137,15 +114,16 @@ def _compute_window_start_ms(dense_kp, dense_mask, total_frames, ms_per_frame,
                               window_duration_ms=WINDOW_DURATION_MS,
                               hand_weight=2.0, smooth_frames=5):
     """
-    Decides where the WINDOW_DURATION_MS sampling window should start within the
+    Decides where the `window_duration_ms` sampling window should start within the
     full video, instead of always starting at t=0.
  
-    dense_kp/dense_mask already cover every frame of the source video (they're
-    built before any windowing happens), so we can use them as a cheap proxy for
-    "how much signing is happening" at each point in time: frame-to-frame
-    landmark displacement, counted only where both frames actually detected the
-    joint. Hand joints are weighted more heavily than pose joints since they
-    carry most of the sign information.
+    First it calculates the frame-to-frame displacement for each joint, masking 
+    movement where a joint isn't visible (mask = 0) and normalizing the 3D change 
+    into a single number. Next a weighted average is performed using 0 for undetected
+    joints and multiplying hand joints by `hand_weight`. The weights are condensed 
+    into a single "motion" score for each frame. Then smoothing is performed using 
+    `smooth_frames` to convolve the the weights and prevent jitter. Lastly, the 
+    center of motion is computed and a clamped window start time is returned.
  
     The window is centered on the time-weighted "center of mass" of that motion.
     This means:
@@ -201,22 +179,22 @@ def _estimate_motion_window_from_pixels(raw_frames, ms_per_frame,
                                          window_duration_ms=WINDOW_DURATION_MS,
                                          downsample_size=(64, 48),
                                          smooth_frames=5, pad_ms=400.0):
-    """
-    Cheap, MediaPipe-free localization pass: figures out roughly where in the
-    video the motion happens using downsampled grayscale frame differencing,
-    so the (expensive) pose/hand landmarker models only need to run on a small
-    padded window instead of every frame of the video.
- 
-    This is much coarser than the landmark-based centering in
-    _compute_window_start_ms (pixel motion also fires on things like clothing,
-    background, or lighting changes) - that's fine, its only job is to pick a
-    generous candidate region. The precise window is chosen afterwards from
-    real landmarks once MediaPipe has run on this smaller region.
- 
-    Returns (start_idx, end_idx): the range of raw frame indices to actually
+    """ 
+    Returns `(start_idx, end_idx)`: the range of raw frame indices to 
     run MediaPipe on. If the whole video already fits within one window, or is
-    too short to bother, returns (0, total_frames) - i.e. no savings applied,
-    same as today's behavior.
+    shorter than `window_duration_ms`, returns (0, total_frames).
+
+    Centers a window of `window_duration_ms` around the point in the video where 
+    the most motion occurs. This window is padded by `pad_ms`. 
+
+    Each frame is downsampled into a `downsample_size` grayscale image to store 
+    brightness and shape patterns. Next, "motion" is estimated by comparing pixel-wise 
+    differences between change and convolving the resulting 2D array into a single value
+    representing the motion. The convolving kernel's length is `smooth_frames`.
+
+    Lastly, a center is computed by the taking a weighted average based on the motion 
+    array computed earlier. A rough start and end index are returned based on the window 
+    size and the padding.
     """
     total_frames = len(raw_frames)
     total_duration_ms = total_frames * ms_per_frame
@@ -243,9 +221,7 @@ def _estimate_motion_window_from_pixels(raw_frames, ms_per_frame,
     pair_times_ms = (np.arange(len(motion)) + 0.5) * ms_per_frame
     center_ms = float(np.average(pair_times_ms, weights=motion))
  
-    # Clamp the core (unpadded) window to valid bounds first, then add padding
-    # around it - this guarantees the full window_duration_ms always fits,
-    # even when the motion estimate lands near the very start or end of the video.
+    # Clamp the unpadded window to avoid issues if the motion occurs toward the start or end of the video.
     core_start_ms = center_ms - window_duration_ms / 2.0
     core_start_ms = max(0.0, min(core_start_ms, total_duration_ms - window_duration_ms))
  
@@ -300,12 +276,19 @@ def extract_video(video_path) -> tuple[np.ndarray[tuple[float, float, float], np
         return (np.zeros((WINDOW_FRAMES, J, 3), dtype = np.float32),
                 np.zeros((WINDOW_FRAMES, J),    dtype = np.float32))
     
+    start_idx, end_idx = _estimate_motion_window_from_pixels(raw_frames, ms_per_frame)
+    dense_start_ms = start_idx * ms_per_frame
+
+    if end_idx - start_idx < total_frames:
+        logger.debug("Running MediaPipe on frames %d-%d of %d for %s (pixel motion pre-pass)",
+                     start_idx, end_idx, total_frames, video_path)
+    
     dense_kp = []
     dense_mask = []
     last_timestamp_ms = -1
 
     with pose_landmarker, hand_landmarker:
-        for i in range(total_frames):
+        for i in range(start_idx, end_idx):
             frame = raw_frames[i]
             
             timestamp_ms = int(round(i * ms_per_frame))
@@ -332,16 +315,21 @@ def extract_video(video_path) -> tuple[np.ndarray[tuple[float, float, float], np
             dense_kp.append(frame_kp)
             dense_mask.append(frame_mask)
 
+    local_start_ms = _compute_window_start_ms(dense_kp, dense_mask, len(dense_kp), ms_per_frame)
+    start_ms = dense_start_ms + local_start_ms
+
     # resampling for specified fps
     processed = []
     masks = []
     valid_count = 0
+    num_dense = len(dense_kp)
 
     for k in range(WINDOW_FRAMES):
-        target_ms = k * FRAME_INTERVAL_MS
-        src_idx = int(round(target_ms / ms_per_frame))
+        target_ms = start_ms + k * FRAME_INTERVAL_MS
+        local_target_ms = target_ms - dense_start_ms
+        src_idx = int(round(local_target_ms / ms_per_frame))
 
-        if src_idx < total_frames:
+        if 0 <= src_idx < total_frames:
             frame_kp = dense_kp[src_idx]
             frame_mask = dense_mask[src_idx]
         else:
@@ -357,18 +345,20 @@ def extract_video(video_path) -> tuple[np.ndarray[tuple[float, float, float], np
     arr = np.array(processed,  dtype=np.float32)
     mask_arr = np.array(masks, dtype=np.float32)
 
-    logger.debug("Extracted %d/%d valid window slots from %s (%d native frames)",
-                 valid_count, WINDOW_FRAMES, video_path, total_frames)
+    logger.debug("Extracted %d/%d valid window slots from %s (window start %.0fms of %.0fms total, "
+                 "MediaPipe ran on %d/%d native frames)",
+                 valid_count, WINDOW_FRAMES, video_path, start_ms, total_frames * ms_per_frame,
+                 num_dense, total_frames)
     
     return arr, mask_arr
 
-def extract_all_videos(dir_from_text = None):
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+def extract_all_videos(dir_from_text = None, out_dir = OUT_DIR):
+    out_dir.mkdir(parents=True, exist_ok=True)
     failed = []
 
     if dir_from_text != None:
         with open(dir_from_text, "r", encoding="utf-8") as file:
-            videos_to_process = [f"data/videos/{x}.mp4" for x in file.readlines()]
+            videos_to_process = [Path(f"data/videos/{x.strip()}.mp4") for x in file.readlines()]
     else:
         videos_to_process = RAW_DIR.glob("*.mp4")
 
@@ -382,8 +372,8 @@ def extract_all_videos(dir_from_text = None):
             failed.append(video_path.stem + ".mp4")
             continue
 
-        np.save(f"{OUT_DIR}/{video_path.stem}.npy", arr)
-        np.save(f"{OUT_DIR}/{video_path.stem}_mask.npy", mask_arr)
+        np.save(f"{out_dir}/{video_path.stem}.npy", arr)
+        np.save(f"{out_dir}/{video_path.stem}_mask.npy", mask_arr)
 
         if failed:
             FAILED_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -416,16 +406,18 @@ def check_length():
 if __name__ == "__main__":
     if input("Task 1? (Y/N): ").lower().strip() == "y":
 
-        check_length()
+        # check_length()
         # Outputs an np array [T, J, 3] and mask np array [T, J]
-        extract_all_videos(dir_from_text="data/reprocess_log.txt")
+        extract_all_videos(dir_from_text=REPROCESS_LOG, out_dir=Path("data/reprocessed"))
     else:
-        vid_num = int(input("Input a video number: "))
+        # vid_num = int(input("Input a video number: "))
 
-        video_stem = next(itertools.islice(RAW_DIR.glob("*.mp4"), vid_num, vid_num+1), None).stem
-        # arr, mask_arr = extract_video(video_path)
+        # video_stem = next(itertools.islice(RAW_DIR.glob("*.mp4"), vid_num, vid_num+1), None).stem
+        # # arr, mask_arr = extract_video(video_path)
 
-        print(video_stem)
+        # print(video_stem)
+
+        video_stem = "18720"
 
         arr = np.load(f"data/processed/{video_stem}.npy", allow_pickle=True)
         mask_arr = np.load(f"data/processed/{video_stem}_mask.npy", allow_pickle=True)
