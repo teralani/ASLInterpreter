@@ -1,6 +1,6 @@
 # Environments
 .env
-.venv
+.venv/
 env/
 venv/
 ENV/
@@ -15,3 +15,4 @@ data/raw_videos_mp4/
 data/videos/
 data/processed
 data
+
