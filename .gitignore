@@ -7,6 +7,9 @@ ENV/
 env.bak/
 venv.bak/
 
+__pycache__/
+**/__pycache__/
+
 # Dataset
 data/download_*.log
 data/missing.txt
