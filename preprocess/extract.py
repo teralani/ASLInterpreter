@@ -11,11 +11,25 @@ from mediapipe.tasks.python.vision import (
     PoseLandmarkerOptions,
 )
 import logging
+from tqdm import tqdm
 
-from utils.skeleton import POSE_JOINT_INDICES, NUM_POSE_JOINTS, WINDOW_DURATION_MS, WINDOW_FRAMES, FRAME_INTERVAL_MS
+# prevents mediapipe warning outputs
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+os.environ["GLOG_minloglevel"] = "2"
+
+import mediapipe as mp
+
+import sys
+sys.path.append(str(Path(__file__).parent.parent.resolve()))
+
+from utils.skeleton import NUM_HAND_JOINTS, POSE_JOINT_INDICES, NUM_POSE_JOINTS, WINDOW_DURATION_MS, WINDOW_FRAMES, FRAME_INTERVAL_MS
 print(POSE_JOINT_INDICES)
 
-RAW_DIR = Path("data/videos")
+ASL_VIDEOS = Path("data/ASL_Citizen/videos")
+WLASL_VIDEOS = Path("data/videos")
+
+RAW_DIR = ASL_VIDEOS
 OUT_DIR = Path("data/processed")
 FAILED_LOG = Path("data/failed_videos.txt")
 REPROCESS_LOG = Path("data/reprocess_log.txt")
@@ -72,8 +86,8 @@ def _extract_frame_keypoints(pose_res, hand_res):
     Builds one (J, 3) row & one (J,) mask row from a single frame's detection results.
 
     Args:
-    pose_res -- A result from a MediaPipe pose landmarker for a single frame
-    hand_res -- A result from a MediaPipe hand landmarker for a single frame
+    pose_res: A result from a MediaPipe pose landmarker for a single frame
+    hand_res: A result from a MediaPipe hand landmarker for a single frame
     """
     frame_kp = []
     frame_mask = []
@@ -114,41 +128,25 @@ def _compute_window_start_ms(dense_kp, dense_mask, total_frames, ms_per_frame,
                               window_duration_ms=WINDOW_DURATION_MS,
                               hand_weight=2.0, smooth_frames=5):
     """
-    Decides where the `window_duration_ms` sampling window should start within the
-    full video, instead of always starting at t=0.
+    Decides where the `window_duration_ms` sampling window should start within the full video instead of always starting at beginning (t = 0).
+    (avoids cutting off crucial motion for a sign)
  
-    First it calculates the frame-to-frame displacement for each joint, masking 
-    movement where a joint isn't visible (mask = 0) and normalizing the 3D change 
-    into a single number. Next a weighted average is performed using 0 for undetected
-    joints and multiplying hand joints by `hand_weight`. The weights are condensed 
-    into a single "motion" score for each frame. Then smoothing is performed using 
-    `smooth_frames` to convolve the the weights and prevent jitter. Lastly, the 
-    center of motion is computed and a clamped window start time is returned.
- 
-    The window is centered on the time-weighted "center of mass" of that motion.
-    This means:
-    - A silent lead-in pause before the signer starts contributes ~zero motion,
-      so the window naturally shifts past it.
-    - If the sign itself runs longer than window_duration_ms, the window centers
-      on the bulk of the motion instead of truncating from frame 0.
- 
-    If no motion is detected anywhere in the clip (e.g. hands never found),
-    falls back to starting at 0.0, matching the previous behavior.
+    If no motion is detected anywhere in the clip, falls back to starting at 0.0.
     """
     total_duration_ms = total_frames * ms_per_frame
  
     if total_duration_ms <= window_duration_ms or total_frames < 2:
         return 0.0
  
-    kp = np.asarray(dense_kp, dtype=np.float32)      # (T, J, 3)
-    mask = np.asarray(dense_mask, dtype=np.float32)  # (T, J)
+    kp = np.asarray(dense_kp, dtype=np.float32) # (T, J, 3)
+    mask = np.asarray(dense_mask, dtype=np.float32) # (T, J)
  
     weights = np.ones(kp.shape[1], dtype=np.float32)
-    weights[NUM_POSE_JOINTS:] = hand_weight  # hand joints come after pose joints
+    weights[NUM_POSE_JOINTS:] = hand_weight 
  
-    diff = kp[1:] - kp[:-1]                # (T-1, J, 3)
-    disp = np.linalg.norm(diff, axis=-1)   # (T-1, J)
-    pair_mask = mask[1:] * mask[:-1]       # both frames must have the joint
+    diff = kp[1:] - kp[:-1] # (T-1, J, 3)
+    disp = np.linalg.norm(diff, axis=-1) # (T-1, J)
+    pair_mask = mask[1:] * mask[:-1] # both frames must have the joint
  
     weighted = disp * pair_mask * weights
     valid_weight = (pair_mask * weights).sum(axis=1)
@@ -180,21 +178,17 @@ def _estimate_motion_window_from_pixels(raw_frames, ms_per_frame,
                                          downsample_size=(64, 48),
                                          smooth_frames=5, pad_ms=400.0):
     """ 
-    Returns `(start_idx, end_idx)`: the range of raw frame indices to 
-    run MediaPipe on. If the whole video already fits within one window, or is
-    shorter than `window_duration_ms`, returns (0, total_frames).
+    Returns `(start_idx, end_idx)`: the range of raw frame indices to run MediaPipe on. 
+    If the whole video already fits within one window, or is shorter than `window_duration_ms`, returns (0, total_frames).
 
-    Centers a window of `window_duration_ms` around the point in the video where 
-    the most motion occurs. This window is padded by `pad_ms`. 
+    Centers window of `window_duration_ms` around the center of motion, padded by `pad_ms`. 
 
-    Each frame is downsampled into a `downsample_size` grayscale image to store 
-    brightness and shape patterns. Next, "motion" is estimated by comparing pixel-wise 
-    differences between change and convolving the resulting 2D array into a single value
-    representing the motion. The convolving kernel's length is `smooth_frames`.
+    Each frame is downsampled into `downsample_size` and made grayscale to store brightness/shape patterns.
 
-    Lastly, a center is computed by the taking a weighted average based on the motion 
-    array computed earlier. A rough start and end index are returned based on the window 
-    size and the padding.
+    Pixelwise motion is detecting by convolving 2D array image using convolving kernel of length `smooth_frames`
+
+    Center is computed and a rough start/end index are returned based on padding and window size.
+
     """
     total_frames = len(raw_frames)
     total_duration_ms = total_frames * ms_per_frame
@@ -215,13 +209,11 @@ def _estimate_motion_window_from_pixels(raw_frames, ms_per_frame,
         motion = np.convolve(motion, kernel, mode="same")
  
     if motion.sum() <= 0:
-        # Static video (or decode issue) - nothing to localize, run over everything
         return 0, total_frames
  
     pair_times_ms = (np.arange(len(motion)) + 0.5) * ms_per_frame
     center_ms = float(np.average(pair_times_ms, weights=motion))
  
-    # Clamp the unpadded window to avoid issues if the motion occurs toward the start or end of the video.
     core_start_ms = center_ms - window_duration_ms / 2.0
     core_start_ms = max(0.0, min(core_start_ms, total_duration_ms - window_duration_ms))
  
@@ -352,18 +344,28 @@ def extract_video(video_path) -> tuple[np.ndarray[tuple[float, float, float], np
     
     return arr, mask_arr
 
-def extract_all_videos(dir_from_text = None, out_dir = OUT_DIR):
+def extract_all_videos(dir_from_text = None, out_dir = OUT_DIR, skip_past : str | None = None ):
     out_dir.mkdir(parents=True, exist_ok=True)
     failed = []
 
     if dir_from_text != None:
         with open(dir_from_text, "r", encoding="utf-8") as file:
-            videos_to_process = [Path(f"data/videos/{x.strip()}.mp4") for x in file.readlines()]
+            videos_to_process = [Path(f"{RAW_DIR}/{x.strip()}.mp4") for x in file.readlines()]
     else:
         videos_to_process = RAW_DIR.glob("*.mp4")
 
-    for video_path in videos_to_process:
-        print(f"Processing {video_path.name}")
+    hasnt_reached = True
+
+    for video_path in tqdm(videos_to_process, desc="Processing videos"):
+
+        if skip_past and hasnt_reached:
+            if video_path.name == skip_past:
+                hasnt_reached = False
+                print(f"Skipping past {skip_past}")
+
+            continue
+
+        tqdm.write(f"Processing {video_path.name}")
 
         arr, mask_arr = extract_video(video_path)
 
@@ -380,44 +382,33 @@ def extract_all_videos(dir_from_text = None, out_dir = OUT_DIR):
             with FAILED_LOG.open("w") as f:
                 for name in failed:
                     f.write(name + "\n")
-            print(f"Logged {len(failed)} failed videos to {FAILED_LOG}")
+            tqdm.write(f"Logged {len(failed)} failed videos to {FAILED_LOG}")
 
     
     print(f"{len(failed)} failed videos.")
-
-def check_length():
-    total = 0
-    too_long = 0
-    REPROCESS_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with REPROCESS_LOG.open("w") as f:
-        for arrays in OUT_DIR.glob("*.npy"):
-            total += 1
-            if "mask" in arrays.stem:
-                continue
-            video = cv2.VideoCapture(f"{RAW_DIR}/{arrays.stem}.mp4")
-
-            if video.get(cv2.CAP_PROP_FRAME_COUNT) // video.get(cv2.CAP_PROP_FPS) > (WINDOW_DURATION_MS) / 1000 : 
-                too_long += 1
-                f.write(arrays.stem + "\n")
-        
-        video.release()
-    print(f"{too_long} of {total} are longer than the {WINDOW_DURATION_MS / 1000} seconds and need reprocessing")
 
 if __name__ == "__main__":
     if input("Task 1? (Y/N): ").lower().strip() == "y":
 
         # check_length()
-        # Outputs an np array [T, J, 3] and mask np array [T, J]
-        extract_all_videos(dir_from_text=REPROCESS_LOG, out_dir=Path("data/reprocessed"))
+        extract_all_videos(out_dir=OUT_DIR, skip_past = "7695266259775881-DIAMOND.mp4")
     else:
-        # vid_num = int(input("Input a video number: "))
+        inp = input("File name or video number (1 / 2)? ").strip()
+        if inp == "2":
+            vid_num = int(input("Input a video number: "))
+            import itertools
+            video_stem = next(itertools.islice(RAW_DIR.glob("*.mp4"), vid_num, vid_num+1), None)
+        # arr, mask_arr = extract_video(video_path)
+        elif inp == "1":
+            vid_num = input("Input a video number: ")
+            video_stem = vid_num
 
-        # video_stem = next(itertools.islice(RAW_DIR.glob("*.mp4"), vid_num, vid_num+1), None).stem
-        # # arr, mask_arr = extract_video(video_path)
+        else:
+            print("Please input a valid number")
+             
+        print(video_stem)
 
-        # print(video_stem)
-
-        video_stem = "18720"
+        # video_stem = "18720"
 
         arr = np.load(f"data/processed/{video_stem}.npy", allow_pickle=True)
         mask_arr = np.load(f"data/processed/{video_stem}_mask.npy", allow_pickle=True)
@@ -426,8 +417,12 @@ if __name__ == "__main__":
 
         from annotate import keypoints_to_video
 
-        keypoints_to_video(arr, mask_arr, output_path=f"skeleton_{video_stem}.mp4", fps=30)
+        cap = cv2.VideoCapture(f"{RAW_DIR}/{video_stem}.mp4")
 
-## TODO: Update preprocessing to take into account the shifting window with a motion signal
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if not fps or fps <= 0:
+            fps = 30.0
+
+        keypoints_to_video(arr, mask_arr, output_path=f"skeleton_{video_stem}.mp4", fps=fps)
 
 

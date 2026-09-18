@@ -1,9 +1,3 @@
-"""
-Reprocess .npy files that are all-zero by re-running keypoint extraction
-against the original videos in data/videos and saving to data/processed.
-
-Usage: run from repository root with the virtualenv activated.
-"""
 from pathlib import Path
 import numpy as np
 import sys

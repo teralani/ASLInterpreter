@@ -4,7 +4,6 @@ import logging
 import cv2
 import sys
 
-# ensure repository root is on sys.path so imports of local modules succeed
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
 
 from old import extract_keypoints as ek
@@ -16,7 +15,6 @@ OUT_DIR = Path("data/test_processed")
 
 
 def get_hand_connections(n):
-    # Standard hand topology template (thumb, index, middle, ring, pinky)
     template = [
         (0, 1), (1, 2), (2, 3), (3, 4),
         (0, 5), (5, 6), (6, 7), (7, 8),
@@ -31,7 +29,6 @@ def draw_landmarks_on_frame(frame, pose_res, hand_res):
     h, w = frame.shape[:2]
     out = frame.copy()
 
-    # draw pose landmarks
     if getattr(pose_res, "pose_landmarks", None):
         try:
             for lm in pose_res.pose_landmarks[0][: ek.POSE_JOINTS]:
@@ -41,7 +38,6 @@ def draw_landmarks_on_frame(frame, pose_res, hand_res):
         except Exception:
             pass
 
-    # draw hands using hand joint count from extract_keypoints
     left, right = ek.normalize_hands(hand_res)
     hand_conns = get_hand_connections(ek.HAND_JOINTS)
 
@@ -81,7 +77,6 @@ def test_preprocess():
     for video in RAW_DIR.glob("*.mp4"):
         print(f"Processing {video.name}")
 
-        # run extraction to get .npy keypoints and mask
         kp_res = ek.extract_video(str(video))
         if isinstance(kp_res, (tuple, list)):
             keypoints, mask = kp_res
@@ -93,7 +88,6 @@ def test_preprocess():
         out_mask = OUT_DIR / f"{video.stem}_mask.npy"
         out_vid = OUT_DIR / f"{video.stem}_annotated.mp4"
 
-        # skip saving empty or all-zero extractions and log failures
         if keypoints.size == 0 or np.count_nonzero(keypoints) == 0:
             logger.warning("Extraction produced no keypoints for %s", video.name)
             failed.append(video.stem + ".mp4")
@@ -103,10 +97,8 @@ def test_preprocess():
         if mask is not None:
             np.save(out_mask, mask)
 
-        # now open the video and write an annotated version
         cap = cv2.VideoCapture(str(video))
         frames = []
-        # capture fps and framesize while capture is open
         fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
         while True:
             ret, frame = cap.read()
@@ -114,32 +106,26 @@ def test_preprocess():
                 break
             frames.append(frame)
 
-        # release early after reading
         cap.release()
 
         if len(frames) == 0:
             logger.warning("No frames to annotate for %s", video.name)
             continue
 
-        # determine sampled indices (same as extraction)
         indices = ek.sample_frames(len(frames), ek.TARGET_FRAMES)
 
-        # init models for detection
         try:
             ek._init_models()
         except Exception:
             logger.exception("Failed to init MediaPipe models for %s", video.name)
 
-        # prepare video writer
         h, w = frames[0].shape[:2]
         if fps <= 0:
-            # fallback to a reasonable fps if capture didn't provide one
             fps = 30.0
 
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         writer = cv2.VideoWriter(str(out_vid), fourcc, float(fps), (w, h))
 
-        # if mp4v writer couldn't be opened (platform/codec issue), fall back to XVID/.avi
         if not writer.isOpened():
             logger.warning("mp4 writer not available on this platform, falling back to .avi XVID for %s", video.name)
             out_vid_avi = out_vid.with_suffix('.avi')
@@ -149,7 +135,6 @@ def test_preprocess():
                 logger.error("Failed to open any VideoWriter for %s; skipping annotated save", video.name)
                 continue
 
-        # re-run detection only on sampled frames and draw landmarks
         for i, frame in enumerate(frames):
             if i in indices:
                 try:
@@ -168,7 +153,6 @@ def test_preprocess():
 
         writer.release()
 
-        # only process a single file in debug; remove break to run over all
         break
 
 

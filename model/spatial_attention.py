@@ -18,4 +18,8 @@ class SpatialAttentionWithBias(nn.Module):
         """
         # ensure bias matches input dtype/device to avoid unexpected casts
         bias = self.bias.to(dtype=x.dtype, device=x.device)
-        return self.attn(x, x, x, attn_mask=bias, key_padding_mask=key_padding_mask)[0]
+        out = self.attn(x, x, x, attn_mask=bias)[0]
+
+        if key_padding_mask is not None:
+            out = out.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
+        return out

@@ -19,7 +19,6 @@ import logging
 
 import itertools
 
-# ensure repository root is on sys.path so imports of local modules succeed
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
 
 from old import extract_keypoints as ek
@@ -32,11 +31,11 @@ OUT_DIR = Path("data/test_processed")
 pose = None
 hand = None
 
-POSE_JOINTS = set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, # Face
-                        11, 12,      # Shoulders
-                        13, 14,      # Elbows
-                        15, 16,      # Wrists
-                        23, 24       # Hips
+POSE_JOINTS = set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                        11, 12,
+                        13, 14,
+                        15, 16,
+                        23, 24
                         ])
 
 def _init_models():
@@ -44,7 +43,6 @@ def _init_models():
     if pose is None:
         pose = PoseLandmarker.create_from_model_path("mediapipe_models/pose_landmarker_full.task")
     if hand is None:
-        # hand = HandLandmarker.create_from_model_path("mediapipe_models/hand_landmarker.task")
         hand_options = HandLandmarkerOptions(
             base_options=mp.tasks.BaseOptions(model_asset_path="mediapipe_models/hand_landmarker.task"),
             num_hands=2,
@@ -53,15 +51,6 @@ def _init_models():
         hand = HandLandmarker.create_from_options(hand_options)
 
 def get_hand_connections(n: int):
-    """
-    Standard hand topology template (thumb, index, middle, ring, pinky).
-    
-    n = 20 returns all joints, n = 5 only returns wrist and thumb
-
-    Args:
-    n -- returns the first n joints in the hand (int)
-    """
-    # 
     template = [
         (0, 1), (1, 2), (2, 3), (3, 4),
         (0, 5), (5, 6), (6, 7), (7, 8),
@@ -72,23 +61,15 @@ def get_hand_connections(n: int):
     return [(a, b) for a, b in template if a < n and b < n]
 
 def draw_landmarks_on_frame(frame, pose_res, hand_res):
-    """
-    Takes a video frame and annotates it with what the pose & hand MediaPipe models output.
-
-    Args:
-    frame -- frame of a video in a NumPy array of shape (height, width, 3)
-    """
     h, w = frame.shape[:2]
     out = frame.copy()
 
-    # test to see if a pose was detected
     if not getattr(pose_res, "pose_landmarks"):
         raise RuntimeWarning("No pose landmarks detected")
     
     for index, landmark in enumerate(pose_res.pose_landmarks[0]):
         if index not in POSE_JOINTS: continue
 
-        # reverse normalization of landmarks
         x = int(landmark.x * w)
         y = int(landmark.y * h)
 
@@ -165,14 +146,6 @@ def draw_landmarks_on_frames(vid_num = 0):
 
 if __name__ == "__main__":
     draw_landmarks_on_frames(152)
-
-# 22 didn't detect hands??
-
-# TODO:
-# Fix flickering when processing
-# Fix jittering when processing
-
-# Actual model should use hand_res.hand_world_landmarks and pose_res.pose_world_landmarks
 
 
 

@@ -2,5 +2,6 @@
     "python.analysis.extraPaths": [
         "./preprocess",
         "./utils"
-    ]
+    ],
+    "python-envs.defaultEnvManager": "ms-python.python:venv"
 }

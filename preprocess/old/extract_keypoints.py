@@ -6,7 +6,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# lazy-load models so import-time failures are handled at runtime
 pose = None
 hand = None
 
@@ -27,13 +26,13 @@ def normalize_hands(hand_result):
     """
     Ensures that the hand that is outputed by the MediaPipe model follows the same order each time.
 
-    (None, None)                 # no hands
+    (None, None)
 
-    (left_landmarks, None)       # only left hand
+    (left_landmarks, None)
 
-    (None, right_landmarks)      # only right hand
+    (None, right_landmarks)
 
-    (left_landmarks, right_landmarks)  # both hands
+    (left_landmarks, right_landmarks)
     
     """
     left = None
@@ -86,19 +85,16 @@ def extract_video(video_path):
     masks = []
     valid_count = 0
 
-    # ensure models are initialized once per process
     try:
         _init_models()
     except Exception as e:
         logger.exception("Failed to initialize MediaPipe models: %s", e)
-        # return all-zero array shaped (0, J, 3) to signal failure
         J = POSE_JOINTS + HAND_JOINTS * 2
         return np.zeros((0, J, 3), dtype=np.float32)
 
     for idx in indices:
         frame = raw_frames[idx]
 
-        # convert BGR->RGB and make contiguous to satisfy MediaPipe
         try:
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_rgb = np.ascontiguousarray(frame_rgb)
@@ -130,7 +126,6 @@ def extract_video(video_path):
             frame_kp.extend([[0.0, 0.0, 0.0]] * POSE_JOINTS)
             frame_mask.extend([0.0] * POSE_JOINTS)
 
-        # ---- HANDS ----
         left, right = normalize_hands(hand_res)
 
         if left:
@@ -156,17 +151,12 @@ def extract_video(video_path):
 
     arr = np.array(processed, dtype=np.float32)
     mask_arr = np.array(masks, dtype=np.float32)  # (F, J)
-    # -------------------------------------------------
-    # Temporal smoothing / fill to reduce flicker:
-    # - forward-fill missing joints (all-zero) from previous valid frame
-    # - backward-fill remaining holes from next valid frame
-    # - this reduces frame-to-frame flicker when a landmark briefly disappears
-    # -------------------------------------------------
+
     if arr.shape[0] > 0:
-        # arr: (F, J, 3)
+        # arr (F, J, 3)
         F, J, C = arr.shape
 
-        # mask of valid entries per (frame, joint)
+        # valid entries mask per (frame, joint)
         valid = (np.abs(arr).sum(axis=2) > 0)  # (F, J)
 
         # forward-fill
@@ -184,5 +174,4 @@ def extract_video(video_path):
                 valid[f, miss] = valid[f + 1, miss]
     logger.debug("Extracted %d/%d valid frames from %s", valid_count, len(indices), video_path)
 
-    # return coordinates and the original detection mask (1.0 for detected landmarks)
     return arr, mask_arr

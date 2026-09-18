@@ -19,7 +19,6 @@ def preprocess_all():
         print(f"Processing {video.name}")
         kp_res = extract_video(str(video))
 
-        # extract_video now returns (coords, mask)
         if isinstance(kp_res, tuple) or isinstance(kp_res, list):
             coords, mask = kp_res
         else:
@@ -28,9 +27,8 @@ def preprocess_all():
 
         out_path = OUT_DIR / f"{video.stem}.npy"
 
-        # skip saving empty or all-zero extractions and log failures
         if coords.size == 0 or np.count_nonzero(coords) == 0:
-            logger.warning("Extraction produced no keypoints for %s", video.name)
+            logger.warning("no keypoints extracted for %s", video.name)
             failed.append(video.stem + ".mp4")
             continue
 
